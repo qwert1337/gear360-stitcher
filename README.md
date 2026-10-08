@@ -39,6 +39,19 @@ or `pip install -e ".[test]"` from a checkout for development.
 
 Video output additionally needs `ffmpeg` on `PATH`.
 
+## Windows
+
+Windows users without Python can download `gear360-stitcher-<version>-windows-x64.zip`
+from the [Releases page](https://github.com/qwert1337/gear360-stitcher/releases),
+unzip it and run `gear360-stitch.exe` from a terminal (PowerShell or cmd):
+
+    gear360-stitch.exe 360_0439.JPG -o out.jpg
+
+The executable is unsigned, so Windows SmartScreen may warn on first start
+("More info" → "Run anyway"). Video input/output additionally needs
+[ffmpeg](https://ffmpeg.org/) installed and on `PATH`
+(e.g. `winget install Gyan.FFmpeg`); photos work without it.
+
 ## Usage
 
     gear360-stitch 360_0439.JPG -o out.jpg
