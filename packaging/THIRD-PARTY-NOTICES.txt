@@ -1,0 +1,25 @@
+Third-party software in this distribution
+=========================================
+
+gear360-stitcher itself is licensed under the GNU GPL v3 or later (see LICENSE);
+its source code is at https://github.com/qwert1337/gear360-stitcher
+
+This executable bundle additionally contains the following components. Their
+license texts are in the "licenses" folder next to this file.
+
+* Python (PSF License) - https://www.python.org/
+* PyInstaller (GPL-2.0-or-later with a bootloader exception that allows
+  bundling) - https://pyinstaller.org/
+* NumPy (BSD-3-Clause, plus the licenses of the libraries it bundles, e.g.
+  OpenBLAS) - https://numpy.org/
+* OpenCV (Apache-2.0), via the opencv-python-headless wheel (MIT packaging) -
+  https://opencv.org/ , https://github.com/opencv/opencv-python
+  The wheel bundles further libraries; the list with their licenses is in
+  licenses/opencv-python-headless/LICENSE-3RD-PARTY.txt. These include FFmpeg's
+  libavcodec/libavformat/libavutil/libswscale/libswresample libraries, licensed
+  under the LGPL 2.1 or later. They are shipped as separate shared libraries
+  (DLLs) in this folder and can be replaced with a compatible build. FFmpeg's
+  source code: https://ffmpeg.org/download.html
+
+The ffmpeg and ffprobe programs themselves are NOT included; install them
+separately for video support (see README.md).

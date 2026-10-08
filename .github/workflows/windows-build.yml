@@ -37,7 +37,8 @@ jobs:
           $name = "gear360-stitcher-${{ github.ref_type == 'tag' && github.ref_name || github.sha }}-windows-x64"
           New-Item -ItemType Directory $name | Out-Null
           Copy-Item -Recurse dist\gear360-stitch\* $name
-          Copy-Item LICENSE, README.md $name
+          Copy-Item LICENSE, README.md, packaging\THIRD-PARTY-NOTICES.txt $name
+          python packaging/collect_licenses.py "$name\licenses"
           Compress-Archive -Path $name -DestinationPath "$name.zip"
           "ZIP=$name.zip" >> $env:GITHUB_ENV
 
