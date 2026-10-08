@@ -3,7 +3,8 @@
 Stitch photos and videos from the **Samsung Gear 360 (SM-C200)** dual-fisheye
 camera into equirectangular panoramas, using per-lens Double Sphere
 calibrations (plus vignette models) and a front-to-back extrinsic pose
-(`calibration.json`, `vignette_*.json`, `R_t.txt`).
+(`calibration.json`, `vignette_*.json`, `R_t.txt`). The default pose is built
+into the code.
 
 The intrinsics (lens calibrations) can be produced with
 [online-camera-calibration.com](https://online-camera-calibration.com/). That
@@ -47,6 +48,9 @@ By default the calibration bundled in the package is used. To use your own:
 
     gear360-stitch in.JPG -o out.jpg \
         --calib-front FRONT_DIR --calib-back BACK_DIR --extrinsics R_t.txt
+
+An `--extrinsics` file is cached in `~/.gear360-stitcher/R_t.txt` and reused
+(with an info message) on later runs that omit the flag.
 
 `gear360-stitch --help` lists all quality/speed options.
 

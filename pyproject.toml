@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gear360-stitcher"
-version = "0.1.0"
+version = "0.2.0"
 description = "Stitch Samsung Gear 360 dual-fisheye photos and videos into equirectangular panoramas using Double Sphere calibrations"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -41,4 +41,4 @@ gear360-stitch = "gear360_stitcher.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-gear360_stitcher = ["data/R_t.txt", "data/*/*.json"]
+gear360_stitcher = ["data/*/*.json"]

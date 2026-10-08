@@ -251,7 +251,20 @@ class FisheyeCamera:
         return FisheyeCamera(scaled_ds, scaled_vignette, (width, height))
 
 
-def load_extrinsics(path: Path, baseline_scale: float) -> np.ndarray:
+# Default back-camera-relative-to-front-camera 3x4 pose: the back lens looks
+# the opposite way (a 180 degree turn about y), one unit behind the front lens
+# along z. Like any extrinsics file, its translation is unit-norm; see
+# load_extrinsics.
+DEFAULT_EXTRINSICS = np.array(
+    [
+        [-1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0, 1.0],
+    ]
+)
+
+
+def load_extrinsics(path: Optional[Path], baseline_scale: float) -> np.ndarray:
     """Load the back-camera-relative-to-front-camera 3x4 pose and give its
     translation a metric length.
 
@@ -267,9 +280,11 @@ def load_extrinsics(path: Path, baseline_scale: float) -> np.ndarray:
     "calibration-board units ... 0.05 for a 50mm checkerboard square", which
     was wrong and survived only because the Gear 360's ~50mm lens separation
     and the 50mm board square happen to be the same number.
+
+    `path=None` uses DEFAULT_EXTRINSICS.
     """
     R_t = np.eye(4)
-    R_t[:3] = np.loadtxt(path)
+    R_t[:3] = DEFAULT_EXTRINSICS if path is None else np.loadtxt(path)
     R_t[:3, -1] *= baseline_scale
     return R_t
 
@@ -1875,7 +1890,7 @@ class StitchConfig:
     # the sigma it chose rounded to nothing and it was an exact synonym for
     # "off", while any sigma large enough to help the seams would have
     # softened the 62% of the frame that needs no blur at all.
-    anti_alias: str = "adaptive"
+    anti_alias: str = "off"
     # Width (as a fraction of output_width) of the Gaussian feather applied
     # to the front/back coverage-validity fallback in composite_panorama,
     # instead of switching lenses at a single hard-edged pixel. Only matters
@@ -1886,7 +1901,7 @@ class StitchConfig:
     # color difference, only spread it over a narrow margin instead of
     # snapping to it in one pixel.
     validity_feather_frac: float = 0.005
-    seam_algorithm: str = "graphcut"  # "graphcut" or "dp"
+    seam_algorithm: str = "dp"  # "graphcut" or "dp"
     # Recompute the seam from scratch every `seam_interval`-th stitched frame
     # (1 = every frame); in between, the mask actually used for blending
     # keeps easing towards the latest computed seam (see seam_smoothing)
@@ -2053,10 +2068,10 @@ class VideoStitchConfig(StitchConfig):
     # reason none of the speed work below touches the resolution.
     output_width: int = 3264
 
-    # A photo pays for the anti-alias pre-filter once, so it takes the
-    # correct per-pixel one; video pays per frame, and at 3264 wide that
-    # is +496 ms/frame (measured), roughly doubling the cost of
-    # everything else in the frame put together.
+    # Off for video, as for a photo (see StitchConfig.anti_alias): the
+    # adaptive pre-filter costs +496 ms/frame at 3264 wide (measured),
+    # roughly doubling the cost of everything else in the frame put
+    # together.
     #
     # What video gives up: the seam regions (~20% of the frame, where the
     # fisheye is downsampled up to ~2x) keep about 47% more
@@ -2065,15 +2080,6 @@ class VideoStitchConfig(StitchConfig):
     # still. See required_blur_sigma for the measurements. Pass
     # --anti-alias adaptive to buy it back, especially for a moving
     # camera.
-    #
-    # Note this is NOT the split that used to live in
-    # cli.py. That one gave video "fixed", a since-removed
-    # mode whose one global blur was sized from the median sampling scale
-    # — which at any width near native rounded to no blur at all, so
-    # video was silently getting "off" while appearing to be filtered.
-    # This makes that explicit rather than restoring it: the cost is now
-    # a deliberate choice against a real alternative, not an accident of
-    # a no-op default.
     anti_alias: str = "off"
 
     # Same reasoning: one bilateral filter, one CLAHE pass and one
@@ -2106,18 +2112,17 @@ class VideoStitchConfig(StitchConfig):
     # taking the frame from 468 ms to 309 ms — on top of seam_interval
     # above, since the two multiply: this is the difference between
     # re-running a cheap search every 5th frame and an expensive one.
+    # Also the StitchConfig default, so photo and video agree.
     #
     # On quiet content the two are indistinguishable (measured over 9
     # consecutive frames: max difference 0.5/255, mean 0.002/255). Where
     # they can differ is the case a seam finder exists for — a subject
     # crossing the seam band — because a per-row DP picks each row's cut
     # independently of its neighbours and can wander where the graphcut
-    # would hold a straight line through the object. Two things make that
-    # affordable here and not for a photo: seam_smoothing eases the mask
-    # over several frames, so a single bad row-path is attenuated rather
-    # than shown, and no one inspects one video frame the way they
-    # inspect a still. Pass --seam-algorithm graphcut for the stricter
-    # search if a moving subject does smear at a seam.
+    # would hold a straight line through the object. In video,
+    # seam_smoothing eases the mask over several frames, so a single bad
+    # row-path is attenuated rather than shown. Pass --seam-algorithm
+    # graphcut for the stricter search if a subject does smear at a seam.
     seam_algorithm: str = "dp"
 
     # Pipeline-level defaults for stitch_video_parallel. Intentionally
@@ -2316,7 +2321,7 @@ class Gear360Stitcher:
         cls,
         calib_front_dir: Path,
         calib_back_dir: Path,
-        extrinsics_path: Path,
+        extrinsics_path: Optional[Path],
         config: StitchConfig,
     ) -> Gear360Stitcher:
         front = FisheyeCamera.load(calib_front_dir)
@@ -2908,7 +2913,7 @@ def _stitch_video_chunk(
     input_path: str,
     calib_front_dir: str,
     calib_back_dir: str,
-    extrinsics_path: str,
+    extrinsics_path: Optional[str],
     config: StitchConfig,
     codec: str,
     crf: int,
@@ -2946,7 +2951,10 @@ def _stitch_video_chunk(
     """
     cv2.setNumThreads(max(1, cv2_threads))
     stitcher = Gear360Stitcher.from_calibration(
-        Path(calib_front_dir), Path(calib_back_dir), Path(extrinsics_path), config
+        Path(calib_front_dir),
+        Path(calib_back_dir),
+        None if extrinsics_path is None else Path(extrinsics_path),
+        config,
     )
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
@@ -3027,9 +3035,14 @@ def _estimate_worker_memory_mb(config: StitchConfig) -> float:
     # charged at their full budget — a hard cap on what either can
     # allocate, and the conservative direction.
     scratch_mb = 2 * _FRAME_SCRATCH_BUDGET_BYTES / 1e6
+    # enhance_panorama's float32 working copies (Lab conversion, bilateral
+    # filter, CLAHE, unsharp mask) of the full panorama, held at once per
+    # worker. Estimated at ~8 three-channel float32 copies, i.e. ~96 B/px.
+    post_process_mb = 96 * pixels / 1e6 if config.post_process else 0.0
     return (
         baseline_mb
         + scratch_mb
+        + post_process_mb
         + (measured_mb_at_reference - baseline_mb) * (pixels / reference_pixels)
     )
 
@@ -3105,7 +3118,7 @@ def stitch_video_parallel(
     output_path: Path,
     calib_front_dir: Path,
     calib_back_dir: Path,
-    extrinsics_path: Path,
+    extrinsics_path: Optional[Path],
     config: StitchConfig,
     workers: int = VideoStitchConfig.DEFAULT_WORKERS,
     codec: str = "libx264",
@@ -3217,7 +3230,7 @@ def stitch_video_parallel(
                 str(input_path),
                 str(calib_front_dir),
                 str(calib_back_dir),
-                str(extrinsics_path),
+                None if extrinsics_path is None else str(extrinsics_path),
                 config,
                 codec,
                 crf,

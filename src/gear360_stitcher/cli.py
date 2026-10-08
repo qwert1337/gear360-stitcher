@@ -1,8 +1,8 @@
 """CLI: stitch a Samsung Gear 360 dual-fisheye photo or video into an
 equirectangular panorama.
 
-Video defaults differ from photo defaults (see VideoStitchConfig) and are
-tuned for speed at full resolution; the flags below buy quality back.
+Video defaults differ from photo defaults in places (see VideoStitchConfig)
+and are tuned for speed at full resolution; the flags below buy quality back.
 
 Examples:
     gear360-stitch 360_0439.JPG -o 360_0439_equirect.jpg
@@ -15,9 +15,11 @@ import argparse
 import dataclasses
 import logging
 import os
+import shutil
 import struct
 import sys
 from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -43,7 +45,11 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DEFAULT_CALIB_FRONT = DATA_DIR / "front"
 DEFAULT_CALIB_BACK = DATA_DIR / "back"
-DEFAULT_EXTRINSICS = DATA_DIR / "R_t.txt"
+
+# Where the extrinsics last passed via --extrinsics are cached, and reused when
+# the flag is omitted.
+CACHE_DIR = Path.home() / ".gear360-stitcher"
+CACHED_EXTRINSICS = CACHE_DIR / "R_t.txt"
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
 
@@ -269,8 +275,10 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="directory with the back lens' calibration.json / vignette_*.json (default: bundled)",
     )
     parser.add_argument(
-        "--extrinsics", type=Path, default=DEFAULT_EXTRINSICS,
-        help="R_t.txt: back-camera-relative-to-front-camera 3x4 pose (default: bundled)",
+        "--extrinsics", type=Path, default=None,
+        help="R_t.txt: back-camera-relative-to-front-camera 3x4 pose. A file given "
+        f"here is cached in {CACHED_EXTRINSICS} and reused when this flag is omitted "
+        "(default: that cached file if present, else the built-in pose)",
     )
     parser.add_argument(
         "--mask-mode", choices=["seam", "simple"], default="seam",
@@ -284,9 +292,9 @@ def parse_args(argv=None) -> argparse.Namespace:
         "see StitchConfig.output_width) gets properly blurred away instead of "
         "aliasing into visible noise. 'adaptive' sizes the blur per output pixel: "
         "none at all at each lens' optical axis, the most near the seams, where the "
-        "fisheye is downsampled up to ~2x. Default: 'adaptive' for a photo, 'off' "
-        "for video, where it roughly doubles the per-frame cost — pass it explicitly "
-        "for video if you would rather have the quality, especially for a moving "
+        "fisheye is downsampled up to ~2x. Default: 'off' for both photo and "
+        "video; 'adaptive' roughly doubles the per-frame cost for video — pass it "
+        "explicitly if you would rather have the quality, especially for a moving "
         "camera, where the aliasing it removes shimmers along the seams. (A third "
         "mode, 'fixed', applied one global blur and was removed — at these output "
         "widths it reduced to 'off' exactly)",
@@ -321,9 +329,9 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--seam-algorithm", choices=["graphcut", "dp"], default=None,
         help="seam-finding algorithm when --mask-mode=seam: 'graphcut' is a true 2D "
         "min-cut, 'dp' a ~3x cheaper per-row dynamic program (default: "
-        f"{StitchConfig.seam_algorithm} for a photo, {VideoStitchConfig.seam_algorithm} "
-        "for a video, where the search runs per frame and seam_smoothing attenuates "
-        "the wandering row-paths 'dp' can produce — see VideoStitchConfig)",
+        f"{StitchConfig.seam_algorithm}; for a video the search runs per frame and "
+        "seam_smoothing attenuates the wandering row-paths 'dp' can produce — see "
+        "VideoStitchConfig)",
     )
     parser.add_argument(
         "--seam-interval", type=int, default=None,
@@ -541,6 +549,24 @@ def _run_level_dry_run(args: argparse.Namespace, is_video: bool, config: StitchC
     logger.info("Dry run: nothing stitched, no rotation applied")
 
 
+def resolve_extrinsics(arg: Optional[Path]) -> Optional[Path]:
+    """The extrinsics file to use: `arg` (also cached for later runs), else
+    the cached one (logged), else None for the built-in default pose."""
+    if arg is not None:
+        try:
+            CACHE_DIR.mkdir(exist_ok=True)
+            if arg.resolve() != CACHED_EXTRINSICS.resolve():
+                shutil.copyfile(arg, CACHED_EXTRINSICS)
+        except OSError as e:
+            logger.warning("Could not cache extrinsics in %s: %s", CACHE_DIR, e)
+        return arg
+    if CACHED_EXTRINSICS.is_file():
+        logger.info("Using cached extrinsics %s (pass --extrinsics to replace them)",
+                    CACHED_EXTRINSICS)
+        return CACHED_EXTRINSICS
+    return None
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     logging.basicConfig(
@@ -595,6 +621,8 @@ def main(argv=None) -> int:
         **overrides,
     )
 
+    extrinsics = resolve_extrinsics(args.extrinsics)
+
     if args.level_dry_run:
         _run_level_dry_run(args, is_video, config)
         return 0
@@ -602,7 +630,7 @@ def main(argv=None) -> int:
     if is_video:
         n = stitch_video_parallel(
             args.input, output,
-            args.calib_front, args.calib_back, args.extrinsics, config,
+            args.calib_front, args.calib_back, extrinsics, config,
             workers=args.workers, codec=args.codec, crf=args.crf, max_frames=args.max_frames,
             warmup_frames=args.warmup_frames, copy_audio=not args.no_audio,
             progress_interval=args.progress_interval,
@@ -612,7 +640,7 @@ def main(argv=None) -> int:
         logger.info("Wrote %d frames to %s", n, output)
     else:
         stitcher = Gear360Stitcher.from_calibration(
-            args.calib_front, args.calib_back, args.extrinsics, config
+            args.calib_front, args.calib_back, extrinsics, config
         )
         image = load_image(args.input)
         panorama = stitcher.stitch(image)
