@@ -18,12 +18,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Build PyInstaller (including its bootloader) from source. The prebuilt
+      # bootloader in the PyInstaller wheels is widely flagged by antivirus
+      # software; a locally compiled one is not on any blocklist.
       - name: Install package and PyInstaller
-        run: python -m pip install pyinstaller .
+        run: |
+          python -m pip install --no-binary pyinstaller pyinstaller
+          python -m pip install .
 
       - name: Build executable
         run: >
-          pyinstaller --noconfirm --clean --onedir --name gear360-stitch
+          pyinstaller --noconfirm --clean --onedir --noupx --name gear360-stitch
           --collect-data gear360_stitcher packaging/run.py
 
       - name: Smoke test
@@ -39,13 +44,14 @@ jobs:
           Copy-Item -Recurse dist\gear360-stitch\* $name
           Copy-Item LICENSE, README.md, packaging\THIRD-PARTY-NOTICES.txt $name
           python packaging/collect_licenses.py "$name\licenses"
-          Compress-Archive -Path $name -DestinationPath "$name.zip"
-          "ZIP=$name.zip" >> $env:GITHUB_ENV
+          "NAME=$name" >> $env:GITHUB_ENV
 
+      # upload-artifact zips what it is given, so hand it the folder rather
+      # than a zip (that would be a zip inside a zip).
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-x64
-          path: ${{ env.ZIP }}
+          name: ${{ env.NAME }}
+          path: ${{ env.NAME }}
 
       - name: Attach to GitHub release
         if: github.ref_type == 'tag'
@@ -53,9 +59,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          Compress-Archive -Path "$env:NAME" -DestinationPath "$env:NAME.zip"
           $ErrorActionPreference = "Continue"
           gh release view "${{ github.ref_name }}" *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes
           }
-          gh release upload "${{ github.ref_name }}" "$env:ZIP" --clobber
+          gh release upload "${{ github.ref_name }}" "$env:NAME.zip" --clobber
