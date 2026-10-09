@@ -65,6 +65,12 @@ By default the calibration bundled in the package is used. To use your own:
 An `--extrinsics` file is cached in `~/.gear360-stitcher/R_t.txt` and reused
 (with an info message) on later runs that omit the flag.
 
+The same goes for the intrinsics: `--calib-front`/`--calib-back` are cached in
+`~/.gear360-stitcher/front` and `~/.gear360-stitcher/back`. A directory may
+contain only some of the three JSON files; only those are cached (replacing
+earlier cached copies). Each file never supplied is taken from the bundled
+package data.
+
 `gear360-stitch --help` lists all quality/speed options.
 
 ## Calibration format

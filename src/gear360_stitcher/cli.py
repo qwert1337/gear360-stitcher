@@ -12,12 +12,14 @@ Examples:
 """
 
 import argparse
+import atexit
 import dataclasses
 import logging
 import os
 import shutil
 import struct
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -43,13 +45,15 @@ logger = logging.getLogger(__name__)
 
 # Bundled default calibration (Gear 360 unit calibrated with autocalib).
 DATA_DIR = Path(__file__).resolve().parent / "data"
-DEFAULT_CALIB_FRONT = DATA_DIR / "front"
-DEFAULT_CALIB_BACK = DATA_DIR / "back"
 
 # Where the extrinsics last passed via --extrinsics are cached, and reused when
 # the flag is omitted.
 CACHE_DIR = Path.home() / ".gear360-stitcher"
 CACHED_EXTRINSICS = CACHE_DIR / "R_t.txt"
+
+# A lens directory's intrinsics files. --calib-front/--calib-back may supply
+# any subset; the rest come from the cache, then the bundled default.
+CALIB_FILES = ("calibration.json", "vignette_circle.json", "vignette_polynomial.json")
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
 
@@ -267,12 +271,16 @@ def parse_args(argv=None) -> argparse.Namespace:
         "same container/image format)",
     )
     parser.add_argument(
-        "--calib-front", type=Path, default=DEFAULT_CALIB_FRONT,
-        help="directory with the front lens' calibration.json / vignette_*.json (default: bundled)",
+        "--calib-front", type=Path, default=None,
+        help="directory with the front lens' calibration.json / vignette_*.json; any subset "
+        f"is fine. Cached in {CACHE_DIR / 'front'} and reused when omitted "
+        "(default: cached files, else bundled)",
     )
     parser.add_argument(
-        "--calib-back", type=Path, default=DEFAULT_CALIB_BACK,
-        help="directory with the back lens' calibration.json / vignette_*.json (default: bundled)",
+        "--calib-back", type=Path, default=None,
+        help="directory with the back lens' calibration.json / vignette_*.json; any subset "
+        f"is fine. Cached in {CACHE_DIR / 'back'} and reused when omitted "
+        "(default: cached files, else bundled)",
     )
     parser.add_argument(
         "--extrinsics", type=Path, default=None,
@@ -567,6 +575,48 @@ def resolve_extrinsics(arg: Optional[Path]) -> Optional[Path]:
     return None
 
 
+def resolve_calib_dir(arg: Optional[Path], lens: str) -> Path:
+    """A complete intrinsics directory for `lens` ("front" or "back").
+
+    Only the CALIB_FILES that `arg` contains are cached (replacing earlier
+    cached copies). Each file is then taken from `arg`, else the cache, else
+    the bundled default. If those don't all live in one directory, they are
+    gathered in a temporary one that is removed at exit."""
+    bundled = DATA_DIR / lens
+    cached = CACHE_DIR / lens
+    if arg is not None:
+        supplied = [n for n in CALIB_FILES if (arg / n).is_file()]
+        if not supplied:
+            raise FileNotFoundError(
+                f"--calib-{lens} {arg} contains none of {', '.join(CALIB_FILES)}")
+        try:
+            cached.mkdir(parents=True, exist_ok=True)
+            for name in supplied:
+                if (arg / name).resolve() != (cached / name).resolve():
+                    shutil.copyfile(arg / name, cached / name)
+        except OSError as e:
+            logger.warning("Could not cache %s intrinsics in %s: %s", lens, cached, e)
+    sources = {}
+    for name in CALIB_FILES:
+        if arg is not None and (arg / name).is_file():
+            sources[name] = arg / name
+        elif (cached / name).is_file():
+            sources[name] = cached / name
+            if arg is None:
+                logger.info("Using cached %s intrinsic %s (pass --calib-%s to replace it)",
+                            lens, sources[name], lens)
+        else:
+            sources[name] = bundled / name
+    dirs = {src.parent for src in sources.values()}
+    if len(dirs) == 1:
+        return dirs.pop()
+    merged = Path(tempfile.mkdtemp(prefix=f"gear360-{lens}-"))
+    atexit.register(shutil.rmtree, merged, ignore_errors=True)
+    for name, src in sources.items():
+        shutil.copyfile(src, merged / name)
+    return merged
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     logging.basicConfig(
@@ -575,6 +625,9 @@ def main(argv=None) -> int:
     )
 
     is_video = args.input.suffix.lower() in VIDEO_EXTENSIONS
+
+    args.calib_front = resolve_calib_dir(args.calib_front, "front")
+    args.calib_back = resolve_calib_dir(args.calib_back, "back")
 
     if args.level_preview is not None:
         _write_level_preview(args, is_video)

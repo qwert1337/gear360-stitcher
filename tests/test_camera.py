@@ -23,3 +23,24 @@ def test_load_calibration_json(tmp_path):
     params, res = load_calibration(path)
     assert params == PARAMS and res == (1920, 1920)
 
+
+
+def test_resolve_calib_dir_caches_only_provided_files(tmp_path, monkeypatch):
+    from gear360_stitcher import cli
+
+    monkeypatch.setattr(cli, "CACHE_DIR", tmp_path / "cache")
+    user = tmp_path / "user"
+    user.mkdir()
+    (user / "calibration.json").write_text("{}")
+
+    assert cli.resolve_calib_dir(None, "front") == cli.DATA_DIR / "front"
+    assert not (tmp_path / "cache").exists()
+
+    out = cli.resolve_calib_dir(user, "front")
+    assert [p.name for p in (tmp_path / "cache" / "front").iterdir()] == ["calibration.json"]
+    assert (out / "calibration.json").read_text() == "{}"
+    for name in cli.CALIB_FILES[1:]:
+        assert (out / name).read_bytes() == (cli.DATA_DIR / "front" / name).read_bytes()
+
+    out = cli.resolve_calib_dir(None, "front")
+    assert (out / "calibration.json").read_text() == "{}"
